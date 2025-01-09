@@ -115,7 +115,6 @@ if video_file and model:
             mime="video/mp4",
         )
 
-
 # Webcam Detection
 st.header("Real-Time Webcam Detection")
 if model:
