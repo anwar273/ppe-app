@@ -19,6 +19,8 @@ CLASS_NAMES = [
     "Hardhat", "Mask", "NO-Hardhat", "NO-Mask", "NO-Safety Vest", "Person", "Safety Cone", "Safety Vest"
 ]
 
+RTC_CONFIGURATION = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+
 # Count classes except 'vehicle' and 'machinery'
 def count_classes(boxes):
     counts = {name: 0 for name in CLASS_NAMES}
@@ -132,6 +134,21 @@ def process_webcam(model, conf):
     cap.release()
     pygame.mixer.quit()  # Ensure pygame resources are released
     st.success("Webcam stopped.")
+# Video Processing Class
+class VideoProcessor:
+    def __init__(self):
+        self.model = None
+        self.confidence_threshold = 0.25
+
+    def recv(self, frame):
+        if not self.model:
+            return frame
+
+        img = frame.to_ndarray(format="bgr24")
+        results = self.model(img, conf=self.confidence_threshold)
+        results[0].boxes = [box for box in results[0].boxes if int(box.cls) not in [8, 9]]
+        annotated_frame = results[0].plot()
+        return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
 
 # Streamlit app
 st.title("Object Detection App")
@@ -209,11 +226,15 @@ if video_file and model:
         st.video(processed_video)
         st.download_button("Download Processed Video", processed_video, "processed_video.mp4")
 
-# Webcam real-time detection
+# Webcam Detection
 st.header("Real-Time Webcam Detection")
-if st.button("Start Webcam"):
-    if model:
-        st.write("Click 'Stop Webcam' to end the webcam feed.")
-        process_webcam(model, confidence_threshold)
-    else:
-        st.error("Model not loaded yet.")
+if model:
+    webrtc_streamer(
+        key="object-detection",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTC_CONFIGURATION,
+        video_processor_factory=lambda: VideoProcessor(),
+        media_stream_constraints={"video": True, "audio": False},
+    )
+else:
+    st.warning("Model is not loaded. Please load the model to start detection.")
