@@ -15,8 +15,8 @@ This project is an object detection web application built with Streamlit and YOL
 
 1. Clone this repository:
    ```bash
-   git clone <repository_url>
-   cd <repository_name>
+   git clone https://github.com/anwar273/ppe-app
+   cd ppe-app
    ```
 
 2. Install dependencies:
