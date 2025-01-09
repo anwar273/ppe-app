@@ -84,4 +84,4 @@ This project is licensed under the MIT License. See the `LICENSE` file for detai
 
 ---
 
-**Developed with ❤ by [Your Name/Organization]**
+**Developed with ❤ by Secure Vision**
