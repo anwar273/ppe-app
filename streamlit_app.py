@@ -209,11 +209,17 @@ if video_file and model:
         st.video(processed_video)
         st.download_button("Download Processed Video", processed_video, "processed_video.mp4")
 
-# Webcam real-time detection
+# Real-time webcam detection
 st.header("Real-Time Webcam Detection")
-if st.button("Start Webcam"):
-    if model:
-        st.write("Click 'Stop Webcam' to end the webcam feed.")
-        process_webcam(model, confidence_threshold)
-    else:
-        st.error("Model not loaded yet.")
+if model:
+    RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+
+    webrtc_streamer(
+        key="object-detection",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTC_CONFIGURATION,
+        video_processor_factory=lambda: VideoProcessor(),
+        media_stream_constraints={"video": True, "audio": False},
+    )
+else:
+    st.warning("Model is not loaded. Please load the model to start detection.")
