@@ -99,7 +99,7 @@ def alert_system(frame, detected_classes):
     
 # Real-time webcam detection
 def process_webcam(model, conf):
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(cv2.CAP_V4L2)
     stframe = st.empty()
     stop_button = st.button("Stop Webcam")
     class_counts = {name: 0 for name in CLASS_NAMES}
