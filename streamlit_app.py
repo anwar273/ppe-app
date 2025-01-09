@@ -91,17 +91,30 @@ if uploaded_file and model:
     )
     st.plotly_chart(fig)
 
-# Video upload
+# Video Detection
 st.header("Video Detection")
 video_file = st.file_uploader("Choose a video file", type=["mp4", "avi"])
 if video_file and model:
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-        temp_file.write(video_file.read())
-        video_path = temp_file.name
     with st.spinner("Processing video..."):
-        processed_video = process_video(video_path, model, confidence_threshold)
-        st.video(processed_video)
-        st.download_button("Download Processed Video", processed_video, "processed_video.mp4")
+        # Save the uploaded video to a temporary path
+        video_path = f"temp_{video_file.name}"
+        with open(video_path, "wb") as temp_file:
+            temp_file.write(video_file.read())
+        
+        # Process the video with the model
+        processed_video = model.predict(video_path, conf=confidence_threshold, save=True)
+        
+        # Display the processed video
+        st.video(processed_video[0].save_path)
+
+        # Optional: Offer a download button for the processed video
+        st.download_button(
+            label="Download Processed Video",
+            data=open(processed_video[0].save_path, "rb").read(),
+            file_name="processed_video.mp4",
+            mime="video/mp4",
+        )
+
 
 # Webcam Detection
 st.header("Real-Time Webcam Detection")
