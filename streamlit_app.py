@@ -1,12 +1,11 @@
 import streamlit as st
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 from ultralytics import YOLO
 from PIL import Image
 import numpy as np
-import cv2
-import tempfile
-import pygame
 import pandas as pd
 import plotly.express as px
+import av
 
 # Load YOLO pretrained model
 @st.cache_resource
