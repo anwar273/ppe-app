@@ -131,6 +131,27 @@ def process_webcam(model, conf):
     cap.release()
     pygame.mixer.quit()  # Ensure pygame resources are released
     st.success("Webcam stopped.")
+# VideoProcessor class for streamlit-webrtc
+class VideoProcessor:
+    def __init__(self):
+        self.model = None
+        self.confidence_threshold = 0.25
+
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+
+        # Perform object detection
+        results = self.model(img, conf=self.confidence_threshold)
+        filtered_boxes = []
+        if hasattr(results[0], 'boxes'):
+            for box in results[0].boxes:
+                if int(box.cls) not in [8, 9]:
+                    filtered_boxes.append(box)
+            results[0].boxes = filtered_boxes
+
+        annotated_frame = results[0].plot()
+
+        return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
 
 # Streamlit app
 st.title("Object Detection App")
