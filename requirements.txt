@@ -6,3 +6,6 @@ pygame
 numpy
 pandas
 plotly
+streamlit-webrtc
+av
+aiortc
