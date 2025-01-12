@@ -99,38 +99,52 @@ def alert_system(frame, detected_classes):
     
 # Real-time webcam detection
 def process_webcam(model, conf):
-    cap = cv2.VideoCapture(0)
-    stframe = st.empty()
-    stop_button = st.button("Stop Webcam")
+    """Process webcam feed for real-time detection."""
+    cap = cv2.VideoCapture(0)  # Access the first webcam (index 0)
+    stframe = st.empty()  # Placeholder for video stream
     class_counts = {name: 0 for name in CLASS_NAMES}
+
+    # Create a button to stop the webcam
+    stop_button = st.button("Stop Webcam")
+    pygame.mixer.init()  # Initialize the pygame mixer for alerts
+
+    # Load alert sound
+    alert_sound = pygame.mixer.Sound("emergency-siren-alert-single-epic-stock-media-1-00-01.mp3")
 
     while cap.isOpened():
         ret, frame = cap.read()
-        if not ret or stop_button:
+        if not ret or stop_button:  # Stop if no frame or stop button clicked
             break
 
+        # Run YOLO detection
         results = model(frame, conf=conf, device='cpu')
         filtered_boxes = []
+
+        # Filter out unwanted classes
         if hasattr(results[0], 'boxes'):
             for box in results[0].boxes:
-                if int(box.cls) not in [8, 9]:
+                if int(box.cls) not in [8, 9]:  # Exclude 'vehicle' and 'machinery'
                     filtered_boxes.append(box)
-    
+
             results[0].boxes = filtered_boxes
-            
-            # Extract class IDs from filtered boxes
+
+            # Extract detected class IDs
             detected_classes = [int(box.cls) for box in filtered_boxes]
+
+            # Trigger alerts if necessary
             alert_system(frame, detected_classes)
-            
+
+            # Count classes in this frame
             frame_counts = count_classes(filtered_boxes)
             for key in frame_counts:
-                class_counts[key] = frame_counts[key]
+                class_counts[key] += frame_counts[key]
 
+        # Display annotated frame
         annotated_frame = results[0].plot()
         stframe.image(annotated_frame, channels="BGR", use_container_width=True)
 
-    cap.release()
-    pygame.mixer.quit()  # Ensure pygame resources are released
+    cap.release()  # Release webcam resource
+    pygame.mixer.quit()  # Ensure pygame quits
     st.success("Webcam stopped.")
 
 # Streamlit app
@@ -209,7 +223,7 @@ if video_file and model:
         st.video(processed_video)
         st.download_button("Download Processed Video", processed_video, "processed_video.mp4")
 
-# Webcam real-time detection
+# Real-time webcam detection logic
 st.header("Real-Time Webcam Detection")
 if st.button("Start Webcam"):
     if model:
