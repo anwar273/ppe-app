@@ -1,13 +1,8 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 from ultralytics import YOLO
-from PIL import Image
-import numpy as np
-import pandas as pd
-import plotly.express as px
 import cv2
 import tempfile
-import pygame
 import av
 
 # Load YOLO pretrained model
@@ -19,20 +14,33 @@ def load_model(model_path):
 CLASS_NAMES = ["Hardhat", "Mask", "NO-Hardhat", "NO-Mask", "NO-Safety Vest", "Person", "Safety Cone", "Safety Vest"]
 RTC_CONFIGURATION = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 
-# Count classes except 'vehicle' and 'machinery'
-def count_classes(boxes):
-    counts = {name: 0 for name in CLASS_NAMES}
-    for box in boxes:
-        class_idx = int(box.cls)
-        if class_idx < len(CLASS_NAMES):
-            class_name = CLASS_NAMES[class_idx]
-            counts[class_name] += 1
-    return counts
+# Process video and save results
+def process_video(video_path, model, conf):
+    cap = cv2.VideoCapture(video_path)
+    temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out = cv2.VideoWriter(temp_video.name, fourcc, fps, (frame_width, frame_height))
 
-# Process image
-def process_image(image, model, conf):
-    results = model.predict(image, conf=conf)
-    return results
+    stframe = st.empty()
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Run YOLO detection
+        results = model.predict(frame, conf=conf)
+        annotated_frame = results[0].plot()
+
+        # Write frame to the output video
+        out.write(annotated_frame)
+        stframe.image(annotated_frame, channels="BGR", use_container_width=True)
+
+    cap.release()
+    out.release()
+    return temp_video.name
 
 # Real-time webcam detection
 class VideoProcessor:
@@ -62,21 +70,17 @@ if model_path:
         except Exception as e:
             st.error(f"Error loading model: {e}")
 
-# Image upload
-st.header("Image Detection")
-uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_container_width=True)
-    if model:
-        results = process_image(np.array(image), model, confidence_threshold)
-        img_res = results[0].plot()
-        st.image(img_res, caption="Detected Image", use_container_width=True)
-
-        detected_classes = [{"Detected Classes": CLASS_NAMES[int(box.cls)], "Confidence": f"{box.conf.item():.2f}"} for box in results[0].boxes]
-        detected_classes_df = pd.DataFrame(detected_classes)
-        fig = px.bar(detected_classes_df, x="Detected Classes", y=detected_classes_df["Confidence"].astype(float))
-        st.plotly_chart(fig)
+# Video upload
+st.header("Video Detection")
+video_file = st.file_uploader("Choose a video file", type=["mp4", "avi"])
+if video_file and model:
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        temp_file.write(video_file.read())
+        video_path = temp_file.name
+    with st.spinner("Processing video..."):
+        processed_video = process_video(video_path, model, confidence_threshold)
+        st.video(processed_video)
+        st.download_button("Download Processed Video", processed_video, "processed_video.mp4")
 
 # Webcam Detection
 st.header("Real-Time Webcam Detection")
