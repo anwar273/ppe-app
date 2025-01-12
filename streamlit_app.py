@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 from ultralytics import YOLO
 import av
 import cv2
@@ -20,14 +20,14 @@ CLASS_NAMES = [
     "Person", "Safety Cone", "Safety Vest"
 ]
 
-# YOLO Video Transformer
-class YOLOTransformer(VideoTransformerBase):
+# YOLO Video Processor
+class YOLOProcessor(VideoProcessorBase):
     def __init__(self, model, conf_threshold, class_names):
         self.model = model
         self.conf_threshold = conf_threshold
         self.class_names = class_names
 
-    def transform(self, frame):
+    def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         
         # Lock inference to avoid thread conflicts
@@ -72,13 +72,13 @@ st.header("Real-Time Object Detection with WebRTC")
 if model:
     webrtc_streamer(
         key="yolo-webrtc",
-        video_transformer_factory=lambda: YOLOTransformer(
+        video_processor_factory=lambda: YOLOProcessor(
             model=model,
             conf_threshold=confidence_threshold,
             class_names=CLASS_NAMES
         ),
         media_stream_constraints={"video": True, "audio": False},
-        async_transform=True,
+        async_processing=True,  # Updated for the new API
     )
 else:
     st.warning("Please load a model to enable real-time detection.")
