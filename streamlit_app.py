@@ -6,235 +6,283 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import av
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+import tempfile
+import pygame
+import cv2
+from pathlib import Path
 
-
-# Load YOLO pretrained model
-@st.cache_resource
-def load_model(model_path):
-    model = YOLO(model_path)  # Load the YOLO model
-    return model
-
-# Class names except machinery and vehicle
-CLASS_NAMES = [
-    "Hardhat", "Mask", "NO-Hardhat", "NO-Mask", "NO-Safety Vest", "Person", "Safety Cone", "Safety Vest"
-]
-
-RTC_CONFIGURATION = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-
-# Count classes except 'vehicle' and 'machinery'
-def count_classes(boxes):
-    counts = {name: 0 for name in CLASS_NAMES}
-    for box in boxes:
-        class_idx = int(box.cls)
-        if class_idx < len(CLASS_NAMES):
-            class_name = CLASS_NAMES[class_idx]
-            counts[class_name] += 1
-    return counts
-
-# Process image
-def process_image(image, model, conf):
-    results = model.predict(image, conf=conf, device='cpu')
-    filtered_boxes = []
-    if hasattr(results[0], 'boxes'):
-        for box in results[0].boxes:
-            if int(box.cls) not in [8, 9]:
-                filtered_boxes.append(box)
-        results[0].boxes = filtered_boxes
-    return results
-
-# Process video and save results
-def process_video(video_path, model, conf):
-    cap = cv2.VideoCapture(video_path)
-    stframe = st.empty()
-    temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out = cv2.VideoWriter(temp_video.name, fourcc, fps, (frame_width, frame_height))
-
-    class_counts = {name: 0 for name in CLASS_NAMES}
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        results = model(frame, conf=conf, device='cpu')
-        filtered_boxes = []
-        if hasattr(results[0], 'boxes'):
-            for box in results[0].boxes:
-                if int(box.cls) not in [8, 9]:
-                    filtered_boxes.append(box)
-            results[0].boxes = filtered_boxes
-
-            frame_counts = count_classes(filtered_boxes)
-            for key in frame_counts:
-                class_counts[key] += frame_counts[key]
-
-        annotated_frame = results[0].plot()
-        out.write(annotated_frame)
-        stframe.image(annotated_frame, channels="BGR", use_container_width=True)
-
-    cap.release()
-    out.release()
-    st.success("Video processing complete!")
-    st.write("Class Counts:")
-    for class_name, count in class_counts.items():
-        st.write(f"{class_name}: {count}")
-
-    return temp_video.name
-
-# Alert System when detecting "NO-Hardhat", "NO-Mask", "NO-Safety Vest"
-def alert_system(frame, detected_classes):
-    if not pygame.mixer.get_init():
-        pygame.mixer.init()
-        
-    alert_sound = pygame.mixer.Sound("emergency-siren-alert-single-epic-stock-media-1-00-01.mp3")
+@dataclass
+class DetectionConfig:
+    """Configuration settings for object detection"""
+    CLASS_NAMES: List[str] = (
+        "Hardhat", "Mask", "NO-Hardhat", "NO-Mask", 
+        "NO-Safety Vest", "Person", "Safety Cone", "Safety Vest"
+    )
+    EXCLUDED_CLASSES: List[int] = (8, 9)  # machinery and vehicle
+    RTC_CONFIGURATION: Dict = None
     
-    if any(cls in [2, 3, 4] for cls in detected_classes):  # Adjust class IDs based on your model
-        if not pygame.mixer.get_busy():  # Play sound only if not already playing
-            pygame.mixer.Sound.play(alert_sound)
-        cv2.putText(frame, "Alert: PPE not detected!", ((frame.shape[1]//2) - 20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    else:
-        pygame.mixer.stop()  # Stop all sounds
-        cv2.putText(frame, "All clear: PPE detected!", ((frame.shape[1]//2) - 20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    
-# Real-time webcam detection
-def process_webcam(model, conf):
-    cap = cv2.VideoCapture(0)
-    stframe = st.empty()
-    stop_button = st.button("Stop Webcam")
-    class_counts = {name: 0 for name in CLASS_NAMES}
+    def __post_init__(self):
+        self.RTC_CONFIGURATION = {
+            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        }
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret or stop_button:
-            break
-
-        results = model(frame, conf=conf, device='cpu')
-        filtered_boxes = []
-        if hasattr(results[0], 'boxes'):
-            for box in results[0].boxes:
-                if int(box.cls) not in [8, 9]:
-                    filtered_boxes.append(box)
-    
-            results[0].boxes = filtered_boxes
-            
-            # Extract class IDs from filtered boxes
-            detected_classes = [int(box.cls) for box in filtered_boxes]
-            alert_system(frame, detected_classes)
-            
-            frame_counts = count_classes(filtered_boxes)
-            for key in frame_counts:
-                class_counts[key] = frame_counts[key]
-
-        annotated_frame = results[0].plot()
-        stframe.image(annotated_frame, channels="BGR", use_container_width=True)
-
-    cap.release()
-    pygame.mixer.quit()  # Ensure pygame resources are released
-    st.success("Webcam stopped.")
-# Video Processing Class
-class VideoProcessor:
+class DetectionModel:
+    """Handles model loading and inference"""
     def __init__(self):
-        self.model = None
-        self.confidence_threshold = 0.25
-
-    def recv(self, frame):
-        if not self.model:
-            return frame
-
-        img = frame.to_ndarray(format="bgr24")
-        results = self.model(img, conf=self.confidence_threshold)
-        results[0].boxes = [box for box in results[0].boxes if int(box.cls) not in [8, 9]]
-        annotated_frame = results[0].plot()
-        return av.VideoFrame.from_ndarray(annotated_frame, format="bgr24")
-
-# Streamlit app
-st.title("Object Detection App")
-st.markdown("Upload an image, video, or use the webcam for real-time object detection using YOLO.")
-
-# Sidebar logo and configuration
-st.sidebar.image("SECURE LOGO.png", width=120, caption="SECURE Vision")
-st.sidebar.title("Model Configuration")
-model_path = st.sidebar.text_input("Enter the model path:", "best1.pt")
-confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.25)
-
-# Load the model
-model = None
-if model_path:
-    with st.spinner("Loading model..."):
-        try:
-            model = load_model(model_path)
-            st.success("Model loaded successfully!")
-        except Exception as e:
-            st.error(f"Error loading model: {e}")
-
-# Image upload
-st.header("Image Detection")
-detected_classes = []  # Initialize as a list
-uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
-
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded Image", use_container_width=True)
+        self._model: Optional[YOLO] = None
+        
+    @st.cache_resource
+    def load_model(self, model_path: str) -> YOLO:
+        """Load and cache the YOLO model"""
+        self._model = YOLO(model_path)
+        return self._model
     
-    if model:
-        results = process_image(np.array(image), model, confidence_threshold)
+    def predict(self, image: np.ndarray, conf: float) -> List:
+        """Run prediction and filter excluded classes"""
+        if not self._model:
+            raise ValueError("Model not loaded")
+            
+        results = self._model.predict(image, conf=conf, device='cpu')
+        return self._filter_results(results)
+    
+    @staticmethod
+    def _filter_results(results: List) -> List:
+        """Filter out excluded classes from results"""
+        if hasattr(results[0], 'boxes'):
+            filtered_boxes = [
+                box for box in results[0].boxes 
+                if int(box.cls) not in DetectionConfig.EXCLUDED_CLASSES
+            ]
+            results[0].boxes = filtered_boxes
+        return results
+
+class AlertSystem:
+    """Handles PPE detection alerts"""
+    def __init__(self, sound_path: str):
+        pygame.mixer.init()
+        self.alert_sound = pygame.mixer.Sound(sound_path)
+        
+    def process(self, frame: np.ndarray, detected_classes: List[int]):
+        """Process frame and trigger alerts if needed"""
+        if any(cls in [2, 3, 4] for cls in detected_classes):
+            self._trigger_alert(frame, "Alert: PPE not detected!", (0, 0, 255))
+        else:
+            self._trigger_all_clear(frame)
+    
+    def _trigger_alert(self, frame: np.ndarray, text: str, color: tuple):
+        """Display alert on frame and play sound"""
+        if not pygame.mixer.get_busy():
+            pygame.mixer.Sound.play(self.alert_sound)
+        self._draw_text(frame, text, color)
+    
+    def _trigger_all_clear(self, frame: np.ndarray):
+        """Display all clear message and stop alert"""
+        pygame.mixer.stop()
+        self._draw_text(frame, "All clear: PPE detected!", (0, 255, 0))
+    
+    @staticmethod
+    def _draw_text(frame: np.ndarray, text: str, color: tuple):
+        """Draw text on frame"""
+        position = ((frame.shape[1]//2) - 20, 30)
+        cv2.putText(frame, text, position, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+class StreamlitInterface:
+    """Manages Streamlit UI and interactions"""
+    def __init__(self):
+        self.config = DetectionConfig()
+        self.model = DetectionModel()
+        self.setup_ui()
+    
+    def setup_ui(self):
+        """Setup main UI components"""
+        st.title("Object Detection App")
+        st.markdown("Upload an image, video, or use the webcam for real-time object detection using YOLO.")
+        
+        self._setup_sidebar()
+        self._setup_image_detection()
+        self._setup_video_detection()
+        self._setup_webcam_detection()
+    
+    def _setup_sidebar(self):
+        """Setup sidebar configuration"""
+        st.sidebar.image("SECURE LOGO.png", width=120, caption="SECURE Vision")
+        st.sidebar.title("Model Configuration")
+        
+        model_path = st.sidebar.text_input("Enter the model path:", "best1.pt")
+        if model_path:
+            self._load_model(model_path)
+        
+        self.confidence_threshold = st.sidebar.slider(
+            "Confidence Threshold", 0.0, 1.0, 0.25
+        )
+    
+    def _load_model(self, model_path: str):
+        """Load the detection model"""
+        with st.spinner("Loading model..."):
+            try:
+                self.model.load_model(model_path)
+                st.success("Model loaded successfully!")
+            except Exception as e:
+                st.error(f"Error loading model: {e}")
+    
+    def _setup_image_detection(self):
+        """Setup image detection section"""
+        st.header("Image Detection")
+        uploaded_file = st.file_uploader("Choose an image file", type=["jpg", "jpeg", "png"])
+        
+        if uploaded_file and self.model._model:
+            self._process_image(uploaded_file)
+    
+    def _process_image(self, uploaded_file):
+        """Process uploaded image"""
+        image = Image.open(uploaded_file).convert("RGB")
+        st.image(image, caption="Uploaded Image", use_container_width=True)
+        
+        results = self.model.predict(np.array(image), self.confidence_threshold)
+        self._display_results(results)
+    
+    def _display_results(self, results):
+        """Display detection results"""
         img_res = results[0].plot()
         st.image(img_res, caption="Detected Image", use_container_width=True)
         
+        detected_classes = self._get_detection_data(results)
+        if detected_classes:
+            self._plot_detection_results(detected_classes)
+    
+    def _get_detection_data(self, results) -> List[Dict]:
+        """Extract detection data from results"""
+        detected_classes = []
         for box in results[0].boxes:
-            class_id = int(box.cls)
-            class_name = CLASS_NAMES[class_id]
-            confidence = box.conf.item()  # Convert tensor to float using .item()
-            
-            # Append data as a dictionary to the list
             detected_classes.append({
-                "Detected Classes": class_name,
-                "Confidence": f"{confidence:.2f}",
+                "Detected Classes": self.config.CLASS_NAMES[int(box.cls)],
+                "Confidence": f"{box.conf.item():.2f}",
             })
-        
-        # Convert the list to a DataFrame after the loop
-        detected_classes_df = pd.DataFrame(detected_classes)
-        
-        # Display the table
-        #st.table(detected_classes_df)
-
-        # Create a Plotly bar chart
+        return detected_classes
+    
+    def _plot_detection_results(self, detected_classes: List[Dict]):
+        """Create and display detection results plot"""
+        df = pd.DataFrame(detected_classes)
         fig = px.bar(
-            detected_classes_df,
+            df,
             x="Detected Classes",
-            y=detected_classes_df["Confidence"].astype(float),
+            y=df["Confidence"].astype(float),
             title="Detected Classes with Confidence Scores",
             labels={"Confidence": "Confidence Scores"},
-            color="Confidence",  # Optional: color based on confidence
+            color="Confidence",
         )
-
-        # Display the plot in Streamlit
         st.plotly_chart(fig)
 
-# Video upload
-st.header("Video Detection")
-video_file = st.file_uploader("Choose a video file", type=["mp4", "avi"])
-if video_file and model:
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-        temp_file.write(video_file.read())
-        video_path = temp_file.name
-    with st.spinner("Processing video..."):
-        processed_video = process_video(video_path, model, confidence_threshold)
-        st.video(processed_video)
-        st.download_button("Download Processed Video", processed_video, "processed_video.mp4")
+    def _setup_video_detection(self):
+        """Setup video detection section"""
+        st.header("Video Detection")
+        video_file = st.file_uploader("Choose a video file", type=["mp4", "avi"])
+        
+        if video_file and self.model._model:
+            self._process_video(video_file)
+    
+    def _process_video(self, video_file):
+        """Process uploaded video"""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+            temp_file.write(video_file.read())
+            with st.spinner("Processing video..."):
+                processed_video = self._run_video_detection(temp_file.name)
+                self._display_video_results(processed_video)
+    
+    def _run_video_detection(self, video_path: str) -> str:
+        """Run detection on video file"""
+        output_path = self._setup_video_writer(video_path)
+        self._process_video_frames(video_path, output_path)
+        return output_path
+    
+    def _setup_video_writer(self, video_path: str) -> str:
+        """Setup video writer for processing"""
+        cap = cv2.VideoCapture(video_path)
+        temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25
+        frame_size = (
+            int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        )
+        out = cv2.VideoWriter(temp_video.name, fourcc, fps, frame_size)
+        cap.release()
+        return temp_video.name
+    
+    def _process_video_frames(self, video_path: str, output_path: str):
+        """Process individual video frames"""
+        cap = cv2.VideoCapture(video_path)
+        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'),
+                            cap.get(cv2.CAP_PROP_FPS),
+                            (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                             int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            results = self.model.predict(frame, self.confidence_threshold)
+            annotated_frame = results[0].plot()
+            out.write(annotated_frame)
+            
+        cap.release()
+        out.release()
+    
+    def _display_video_results(self, video_path: str):
+        """Display processed video and download button"""
+        st.video(video_path)
+        st.download_button(
+            "Download Processed Video",
+            Path(video_path).read_bytes(),
+            "processed_video.mp4"
+        )
+    
+    def _setup_webcam_detection(self):
+        """Setup webcam detection section"""
+        st.header("Real-Time Webcam Detection")
+        if self.model._model:
+            self._start_webcam_detection()
+        else:
+            st.warning("Model is not loaded. Please load the model to start detection.")
+    
+    def _start_webcam_detection(self):
+        """Start webcam detection"""
+        webrtc_streamer(
+            key="object-detection",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=self.config.RTC_CONFIGURATION,
+            video_processor_factory=self._create_video_processor,
+            media_stream_constraints={"video": True, "audio": False},
+        )
+    
+    def _create_video_processor(self):
+        """Create video processor for webcam detection"""
+        processor = VideoProcessor()
+        processor.model = self.model._model
+        processor.confidence_threshold = self.confidence_threshold
+        return processor
 
-# Webcam Detection
-st.header("Real-Time Webcam Detection")
-if model:
-    webrtc_streamer(
-        key="object-detection",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration=RTC_CONFIGURATION,
-        video_processor_factory=lambda: VideoProcessor(),
-        media_stream_constraints={"video": True, "audio": False},
-    )
-else:
-    st.warning("Model is not loaded. Please load the model to start detection.")
+class VideoProcessor:
+    """Processes video frames for webcam detection"""
+    def __init__(self):
+        self.model = None
+        self.confidence_threshold = 0.25
+    
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        """Process received video frame"""
+        if not self.model:
+            return frame
+            
+        img = frame.to_ndarray(format="bgr24")
+        results = self.model(img, conf=self.confidence_threshold)
+        results[0].boxes = [
+            box for box in results[0].boxes 
+            if int(box.cls) not in DetectionConfig.EXCLUDED_CLASSES
+        ]
+        return av.VideoFrame.from_ndarray(results[0].plot(), format="bgr24")
+
+if __name__ == "__main__":
+    app = StreamlitInterface()
